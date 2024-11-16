@@ -91,8 +91,8 @@ Make sure you have the following installed:
 ### Create Purchase
 To create a new purchase, send a POST request to /api/purchases/ with the following payload:
 
-bash
-```{
+
+```bash{
   "items": [
     {
       "id": 1,
@@ -109,8 +109,8 @@ bash
 ### Update Purchase
 To update an existing purchase, send a PUT request to /api/purchases/{id}/ with the following payload:
 
-bash
-```{
+
+```bash{
   "items": [
     {
       "id": 1,
