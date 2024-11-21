@@ -1,4 +1,4 @@
-nvoice Generation API
+Invoice Generation API
 This project is an API that allows users to manage a list of items for sale, create purchase orders, update those orders, and generate invoices in PDF format. The application facilitates the following actions:
 
 View available items with their details (name, price, description).
