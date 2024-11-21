@@ -3,6 +3,9 @@ from rest_framework.test import APIClient
 from rest_framework import status
 from .models import Item, Purchase, PurchaseItem
 from .serializers import ItemSerializer, PurchaseItemSerializer, PurchaseSerializer
+from io import BytesIO
+from PyPDF2 import PdfReader
+from django.urls import reverse
 
 class ItemModelTestCase(TestCase):
     def setUp(self):
@@ -245,6 +248,8 @@ class ItemListViewTestCase(TestCase):
 class CreatePurchaseViewTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
+
+        # Create test items
         self.item1 = Item.objects.create(
             name="Item 1",
             price=10.00,
@@ -257,6 +262,8 @@ class CreatePurchaseViewTestCase(TestCase):
             description="Second test item",
             stock=30
         )
+
+        # Define valid and invalid data
         self.valid_data = {
             "items": [
                 {"id": self.item1.id, "quantity": 5},
@@ -269,21 +276,35 @@ class CreatePurchaseViewTestCase(TestCase):
             ]
         }
 
+        # Use reverse to dynamically generate the endpoint URL
+        self.create_purchase_url = reverse('create-purchase')
+
     def test_create_purchase_success(self):
         """Test creating a purchase with valid data."""
-        response = self.client.post('/api/purchases/', self.valid_data, format='json')  # Replace with your endpoint
+        response = self.client.post(self.create_purchase_url, self.valid_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        # Verify that one purchase was created
         self.assertEqual(Purchase.objects.count(), 1)
         purchase = Purchase.objects.first()
-        self.assertEqual(purchase.items.count(), 2)
+
+        # Verify the correct number of purchase items
+        purchase_items = PurchaseItem.objects.filter(purchase=purchase)
+        self.assertEqual(purchase_items.count(), 2)
+
+        # Verify stock updates
         self.item1.refresh_from_db()
         self.assertEqual(self.item1.stock, 45)  # Stock reduced by quantity
 
     def test_create_purchase_insufficient_stock(self):
         """Test creating a purchase with insufficient stock."""
-        response = self.client.post('/api/purchases/', self.invalid_data, format='json')  # Replace with your endpoint
+        response = self.client.post(self.create_purchase_url, self.invalid_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Verify the error message
         self.assertEqual(response.data['error'], f"Not enough stock for {self.item1.name}")
+
+        # Verify stock remains unchanged
         self.item1.refresh_from_db()
         self.assertEqual(self.item1.stock, 50)  # Stock remains unchanged
 
@@ -309,11 +330,62 @@ class UpdatePurchaseViewTestCase(TestCase):
                 {"id": self.item2.id, "quantity": 15}
             ]
         }
+        # Use reverse to dynamically generate the endpoint URL
+        self.update_purchase_url = reverse('update-purchase', kwargs={'id': self.purchase.id})
 
     def test_update_purchase(self):
         """Test updating an existing purchase."""
-        response = self.client.put(f'/api/purchases/{self.purchase.id}/', self.update_data, format='json')  # Replace with your endpoint
+        response = self.client.put(self.update_purchase_url, self.update_data, format='json')  
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['message'], "Purchase updated successfully")
         self.assertEqual(self.purchase.items.count(), 1)
         self.assertIn(self.item2, self.purchase.items.all())
+
+class InvoiceViewTest(TestCase):
+    def setUp(self):
+        """
+        Set up test data for the InvoiceView.
+        """
+        self.client = APIClient()
+
+        # Create items
+        self.item1 = Item.objects.create(name="Item 1", price=10.00, description="Test Item 1", stock=100)
+        self.item2 = Item.objects.create(name="Item 2", price=20.00, description="Test Item 2", stock=100)
+
+        # Create purchase and purchase items
+        self.purchase = Purchase.objects.create()
+        PurchaseItem.objects.create(purchase=self.purchase, item=self.item1, quantity=2)
+        PurchaseItem.objects.create(purchase=self.purchase, item=self.item2, quantity=3)
+
+        # URL for the invoice view
+        self.invoice_url = reverse('generate-invoice', kwargs={'id': self.purchase.id})
+
+    def test_generate_invoice_pdf(self):
+        """
+        Test the generation of a PDF invoice for a given purchase.
+        """
+        # Send GET request to generate invoice
+        response = self.client.get(self.invoice_url)
+
+        # Check if the response returns a PDF file
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertTrue(response.has_header('Content-Disposition'))
+        self.assertIn('attachment; filename="invoice.pdf"', response['Content-Disposition'])
+
+        # Validate PDF content
+        # Since FileResponse is streamed, we need to join the streaming content
+        pdf_stream = b"".join(response.streaming_content)
+        pdf_buffer = BytesIO(pdf_stream)
+        
+        # Use PyPDF2 to read the PDF content
+        pdf_reader = PdfReader(pdf_buffer)
+        
+        # Extract text from all pages
+        pdf_text = ''.join([page.extract_text() for page in pdf_reader.pages])
+
+        # Check if the text includes invoice details
+        self.assertIn("Invoice", pdf_text)
+        self.assertIn("Item 1 x 2 @ 10.0", pdf_text)
+        self.assertIn("Item 2 x 3 @ 20.0", pdf_text)
+        self.assertIn("Total: 80.0", pdf_text)
